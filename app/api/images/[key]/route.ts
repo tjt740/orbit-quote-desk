@@ -1,0 +1,4 @@
+import {images} from '@/lib/storage';
+import {IMAGE_KEY} from '@/lib/product-images';
+export const dynamic='force-dynamic';
+export async function GET(req:Request,{params}:{params:Promise<{key:string}>}){const {key}=await params;if(!IMAGE_KEY.test(key))return new Response('Not found',{status:404});try{const image=await images().get('product-images/'+key);if(!image)return new Response('Not found',{status:404});const headers=new Headers({'Content-Type':image.httpMetadata?.contentType??'application/octet-stream','Content-Length':String(image.size),'Cache-Control':'private, max-age=3600','ETag':image.httpEtag,'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});if(req.headers.get('if-none-match')===image.httpEtag)return new Response(null,{status:304,headers});return new Response(image.body,{headers});}catch(error){console.error('Product image load',error);return new Response('Image unavailable',{status:503});}}
