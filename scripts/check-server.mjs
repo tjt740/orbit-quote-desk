@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+const origin=process.env.ORBIT_TEST_URL||'http://127.0.0.1:3210';
+let cookies='';
+async function call(path,method='GET',body,headers={}){const r=await fetch(origin+path,{method,headers:{Origin:origin,...(cookies?{Cookie:cookies}:{}),...headers},body});const cookie=r.headers.get('set-cookie');if(cookie)cookies=cookie.split(';')[0];return r;}
+assert.equal((await call('/')).status,200);
+assert.equal((await call('/api/auth')).status,200);
+const catalog=await (await call('/api/catalog')).json();assert.equal(catalog.catalog.products.length,34);
+assert.equal((await call('/api/catalog','PUT',JSON.stringify(catalog),{'Content-Type':'application/json'})).status,401);
+assert.equal((await call('/api/images','POST',new Uint8Array([1,2]),{'Content-Type':'image/png'})).status,401);
+assert(process.env.ORBIT_TEST_PASSWORD,'Test password is required');
+const login=await call('/api/auth','POST',JSON.stringify({username:process.env.ORBIT_ADMIN_USERNAME,password:process.env.ORBIT_TEST_PASSWORD}),{'Content-Type':'application/json'});assert.equal(login.status,200);assert.equal((await login.json()).role,'admin');
+assert.equal((await (await call('/api/auth')).json()).role,'admin');
+const saved=await call('/api/catalog','PUT',JSON.stringify({catalog:catalog.catalog,revision:catalog.revision}),{'Content-Type':'application/json'});assert.equal(saved.status,200);assert.equal((await saved.json()).revision,catalog.revision+1);
+assert.equal((await call('/api/catalog','PUT',JSON.stringify({catalog:catalog.catalog,revision:catalog.revision}),{'Content-Type':'application/json'})).status,409);
+assert.equal((await call('/api/catalog','PUT','{}',{'Content-Type':'application/json',Origin:'https://other.example'})).status,403);
+const bytes=Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jJ/oAAAAASUVORK5CYII=','base64'));
+const image=await call('/api/images','POST',bytes,{'Content-Type':'image/png'});assert.equal(image.status,201);const {key}=await image.json();const read=await call('/api/images/'+key);assert.equal(read.status,200);assert.equal(read.headers.get('content-type'),'image/png');assert.deepEqual(new Uint8Array(await read.arrayBuffer()),bytes);
+assert.equal((await call('/api/images','POST',new Uint8Array(5*1024*1024+1),{'Content-Type':'image/png'})).status,413);
+assert.equal((await call('/api/auth','DELETE')).status,200);assert.equal((await (await call('/api/auth')).json()).role,'viewer');
+console.log('PASS: page, seeded catalog, admin authentication, viewer write rejection, revision conflict, origin rejection, image round trip/size limit, logout.');

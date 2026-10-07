@@ -1,0 +1,47 @@
+name: Linux server release
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build:server
+      - name: Package and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -R public .next/standalone/public
+          cp -R .next/static .next/standalone/.next/static
+          export ORBIT_ADMIN_USERNAME=orbit-test
+          export ORBIT_TEST_PASSWORD="$(openssl rand -hex 24)"
+          export ORBIT_DATA_DIR="$RUNNER_TEMP/orbit-test-data"
+          export ORBIT_ADMIN_PASSWORD_HASH="$(node --input-type=module -e 'import {randomBytes,pbkdf2Sync} from "node:crypto";const salt=randomBytes(24);console.log(JSON.stringify({salt:salt.toString("hex"),hash:pbkdf2Sync(process.env.ORBIT_TEST_PASSWORD,salt,100000,32,"sha256").toString("hex")}))')"
+          PORT=3210 HOSTNAME=127.0.0.1 node .next/standalone/server.js > "$RUNNER_TEMP/orbit-test.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:3210/api/auth > /dev/null; then break; fi
+            sleep 1
+          done
+          node scripts/check-server.mjs
+          mkdir -p release
+          tar -czf release/orbit-quote-desk-linux-x64.tar.gz -C .next/standalone .
+          cp scripts/deploy-server.sh release/
+          cd release
+          sha256sum orbit-quote-desk-linux-x64.tar.gz deploy-server.sh > SHA256SUMS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="server-${GITHUB_SHA:0:12}"
+          gh release create "$tag" release/* --target "$GITHUB_SHA" --title "Linux server ${GITHUB_SHA:0:12}" --notes "Node 24 standalone build. SQLite and images remain outside the release directory. Authentication and upload API checks passed on Linux. No administrator credentials are bundled."
